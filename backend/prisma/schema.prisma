@@ -1,0 +1,267 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User model - Store owners and team members
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String
+  firstName     String
+  lastName      String
+  role          UserRole @default(OWNER)
+  isActive      Boolean  @default(true)
+  emailVerified Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  stores        Store[]
+  sessions      Session[]
+  conversations Conversation[]
+
+  @@index([email])
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  AGENT
+}
+
+// Session model for JWT refresh tokens
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  refreshToken String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([refreshToken])
+}
+
+// Store model - E-commerce stores
+model Store {
+  id          String        @id @default(cuid())
+  name        String
+  domain      String?
+  platform    Platform
+  isActive    Boolean       @default(true)
+  timezone    String        @default("UTC")
+  currency    String        @default("USD")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  ownerId     String
+
+  owner          User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  integrations   Integration[]
+  conversations  Conversation[]
+  knowledgeBase  KnowledgeBase[]
+  subscription   Subscription?
+  analyticsEvent AnalyticsEvent[]
+
+  @@index([ownerId])
+  @@index([platform])
+}
+
+enum Platform {
+  SHOPIFY
+  WOOCOMMERCE
+}
+
+// Integration model - API credentials and configs
+model Integration {
+  id            String           @id @default(cuid())
+  storeId       String
+  type          IntegrationType
+  credentials   Json // Encrypted JSON with API keys
+  config        Json // Additional configuration
+  isActive      Boolean          @default(true)
+  lastSyncedAt  DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([type])
+}
+
+enum IntegrationType {
+  SHOPIFY
+  WOOCOMMERCE
+  WHATSAPP
+  EMAIL
+  STRIPE
+}
+
+// Subscription model - Billing and plan info
+model Subscription {
+  id                 String            @id @default(cuid())
+  storeId            String            @unique
+  plan               SubscriptionPlan
+  status             SubscriptionStatus
+  stripeCustomerId   String?           @unique
+  stripeSubscriptionId String?         @unique
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean           @default(false)
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([status])
+}
+
+enum SubscriptionPlan {
+  BASIC     // $19/mo
+  PRO       // $49/mo
+  ENTERPRISE // $99/mo
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELED
+  TRIAL
+}
+
+// Conversation model - Chat sessions
+model Conversation {
+  id               String             @id @default(cuid())
+  storeId          String
+  customerId       String? // External customer ID from e-commerce platform
+  customerEmail    String?
+  customerName     String?
+  channel          Channel
+  status           ConversationStatus @default(OPEN)
+  assignedToUserId String?
+  subject          String?
+  sentiment        String? // positive, neutral, negative
+  priority         Priority           @default(NORMAL)
+  tags             String[] // Array of tags
+  metadata         Json? // Additional metadata
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  closedAt         DateTime?
+
+  store        Store     @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  assignedTo   User?     @relation(fields: [assignedToUserId], references: [id])
+  messages     Message[]
+
+  @@index([storeId])
+  @@index([status])
+  @@index([channel])
+  @@index([assignedToUserId])
+}
+
+enum Channel {
+  WEBSITE
+  WHATSAPP
+  EMAIL
+  SMS
+}
+
+enum ConversationStatus {
+  OPEN
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// Message model - Individual messages
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  content        String   @db.Text
+  sender         Sender
+  senderName     String?
+  isAiGenerated  Boolean  @default(false)
+  aiModel        String? // e.g., "claude-3-opus-20240229"
+  metadata       Json? // Additional metadata (e.g., order lookup results)
+  attachments    String[] // Array of attachment URLs
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+}
+
+enum Sender {
+  CUSTOMER
+  AGENT
+  AI
+  SYSTEM
+}
+
+// KnowledgeBase model - FAQs and documents
+model KnowledgeBase {
+  id          String   @id @default(cuid())
+  storeId     String
+  title       String
+  content     String   @db.Text
+  category    String?
+  tags        String[]
+  isActive    Boolean  @default(true)
+  priority    Int      @default(0) // Higher priority = more likely to be retrieved
+  metadata    Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store      Store       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  embeddings Embedding[]
+
+  @@index([storeId])
+  @@index([category])
+  @@index([isActive])
+}
+
+// Embedding model - Vector embeddings for RAG
+model Embedding {
+  id              String   @id @default(cuid())
+  knowledgeBaseId String
+  vector          Float[] // Vector embedding
+  model           String // e.g., "text-embedding-ada-002"
+  createdAt       DateTime @default(now())
+
+  knowledgeBase KnowledgeBase @relation(fields: [knowledgeBaseId], references: [id], onDelete: Cascade)
+
+  @@index([knowledgeBaseId])
+}
+
+// AnalyticsEvent model - Raw analytics data
+model AnalyticsEvent {
+  id             String   @id @default(cuid())
+  storeId        String
+  eventType      String // e.g., "message_sent", "conversation_started", "ai_response_generated"
+  eventData      Json
+  conversationId String?
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
+  @@index([eventType])
+  @@index([createdAt])
+}
